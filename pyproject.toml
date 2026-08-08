@@ -2,6 +2,8 @@
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+[tool.vercel]
+entrypoint = "resume_tailor.web:app"
 [project]
 name = "resume-tailor"
 version = "0.1.0"
