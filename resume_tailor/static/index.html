@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Resume Tailor — Evidence-Grounded Resume Builder</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">RT</span>
+      <span class="brand-name">Resume Tailor</span>
+      <span class="brand-tag">evidence-grounded</span>
+    </div>
+    <div class="topbar-actions">
+      <button id="btn-undo" class="btn btn-ghost" disabled title="Revert the last applied edit">↩ Undo</button>
+      <button id="btn-export-pdf" class="btn btn-ghost" disabled title="Download the rendered PDF">PDF</button>
+      <button id="btn-export-tex" class="btn btn-ghost" disabled title="Download the LaTeX source">TEX</button>
+      <button id="btn-run" class="btn btn-primary">New Run</button>
+    </div>
+  </header>
+
+  <dialog id="run-modal" class="modal">
+    <form id="run-form">
+      <h2 class="modal-title">New run</h2>
+      <p class="modal-sub">Paste a job description — every resume claim will be matched and verified against your evidence.</p>
+
+      <div class="field">
+        <div class="field-head">
+          <span class="field-label">Job description</span>
+          <button type="button" id="btn-sample" class="btn btn-sample">Use sample JD</button>
+        </div>
+        <textarea id="jd" rows="9" placeholder="Senior Backend Engineer @ Acme&#10;We build distributed systems at scale.&#10;Requirements: 5+ years of Python; Redis and message queues; PostgreSQL, Docker..."></textarea>
+      </div>
+
+      <div id="build-progress" class="build-progress hidden">
+        <div class="build-bar"><div id="build-fill" class="build-fill"></div></div>
+        <div id="build-phase" class="build-phase">Starting…</div>
+      </div>
+
+      <div class="grid-2">
+        <label class="field">
+          <span class="field-label">Candidate name</span>
+          <input id="name" value="Jake Ryan" autocomplete="off">
+        </label>
+        <label class="field">
+          <span class="field-label">Email</span>
+          <input id="email" value="jake@su.edu" autocomplete="off">
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field-label">GitHub username <em class="optional">optional — collect a live corpus</em></span>
+        <input id="github" placeholder="e.g. sindresorhus" autocomplete="off">
+      </label>
+
+      <label class="switch-field">
+        <input type="checkbox" id="evidence-toggle" checked>
+        <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+        <span class="switch-text">
+          <span class="switch-title">Evidence-based drafting</span>
+          <span class="switch-sub">Verify every claim against your sources and drop unverifiable bullets. Off = quick draft, no verification pass.</span>
+        </span>
+      </label>
+
+      <p id="run-error" class="error hidden"></p>
+
+      <div class="modal-actions">
+        <button type="button" id="modal-close" class="btn">Cancel</button>
+        <button type="submit" id="run-submit" class="btn btn-primary">Build verified resume</button>
+      </div>
+    </form>
+  </dialog>
+
+  <main id="main" class="layout hidden">
+    <section class="pane pane-pdf">
+      <div class="pane-head">
+        <span>PDF Preview</span>
+        <span class="pane-head-right">
+          <span id="draft-badge" class="draft-badge hidden" title="Evidence verification was skipped for this run">draft</span>
+          <span id="pdf-status" class="status-dot" title="Updated on applied chat sends">●</span>
+        </span>
+      </div>
+      <div id="pdf-wrap" class="pdf-wrap">
+        <div id="pdf-canvas" class="pdf-canvas"></div>
+        <div id="pdf-fallback" class="pdf-fallback hidden">
+          <div class="pdf-fallback-inner">
+            <p>Inline preview isn't supported in this window.</p>
+            <div class="pdf-fallback-actions">
+              <a id="pdf-open" class="btn" target="_blank" rel="noopener">Open PDF</a>
+              <a id="pdf-dl" class="btn" download="resume.pdf">Download PDF</a>
+              <a id="tex-dl" class="btn" download="resume.tex">Download TEX</a>
+            </div>
+          </div>
+        </div>
+        <div id="pdf-empty" class="pdf-empty">Your rendered PDF will appear here after a run.</div>
+      </div>
+    </section>
+
+    <section class="pane pane-side">
+      <nav class="tabs" role="tablist">
+        <button class="tab active" data-tab="chat" role="tab">Chat</button>
+        <button class="tab" data-tab="trace" role="tab">Trace</button>
+        <button class="tab" data-tab="resume" role="tab">Resume</button>
+      </nav>
+
+      <div id="tab-chat" class="tabpanel active">
+        <div id="chat-thread" class="chat-thread">
+          <div class="chat-empty">Run a job description, then refine your resume here.<br>Unverifiable claims are refused — never silently inserted.</div>
+        </div>
+        <div class="chat-input-row">
+          <input id="chat-input" type="text" placeholder="e.g. Make the first bullet more confident…" autocomplete="off" disabled>
+          <button id="chat-send" class="btn btn-primary" disabled>Send</button>
+        </div>
+      </div>
+
+      <div id="tab-trace" class="tabpanel"></div>
+      <div id="tab-resume" class="tabpanel"></div>
+    </section>
+  </main>
+
+  <div id="welcome" class="welcome">
+    <div class="welcome-card">
+      <h1>Build a resume that can <span class="accent">prove itself</span>.</h1>
+      <p class="welcome-sub">Paste a job description and get a LaTeX resume where every claim is matched against your evidence, verified line-by-line, and refined in plain English.</p>
+      <button id="btn-run-welcome" class="btn btn-primary btn-lg">Start a new run</button>
+      <ul class="welcome-points">
+        <li>🧭 Live retrieval traces — watch queries reformulate until evidence lands</li>
+        <li>🛡️ Every bullet verified against cited evidence, or dropped</li>
+        <li>💬 Chat refinements applied deterministically, with undo</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- pdf.js is loaded async: a slow/blocked CDN must never block app.js from
+       running (dead buttons). refreshPdf() guards window.pdfjsLib at call time
+       and falls back to Open/Download links when the lib is absent. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" async></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+{
+  "fetched_at": "2026-08-08T00:00:00Z",
+  "username": "janedemo",
+  "repos": [
+    {
+      "full_name": "janedemo/backend-api",
+      "description": "REST API for learning management systems",
+      "stargazers_count": 210,
+      "language": "Python",
+      "updated_at": "2026-07-01T00:00:00Z",
+      "default_branch": "main",
+      "readme": "# Backend API\n\nFastAPI + PostgreSQL REST API for LMS data.\n\n- Uses Redis and BullMQ for async task queues\n- Dockerized deployment\n- 90% test coverage",
+      "files": [
+        {
+          "path": "app/queue.py",
+          "content": "import redis\n\nclient = redis.Redis(host='cache', port=6379)\n\ndef enqueue(job):\n    client.lpush('jobs', job)\n\ndef worker():\n    while True:\n        job = client.brpop('jobs')[1]\n        process(job)\n"
+        },
+        {
+          "path": "requirements.txt",
+          "content": "fastapi\nuvicorn\nredis\ncelery\n"
+        }
+      ],
+      "commits": [
+        { "sha": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", "message": "Add async queue with Redis and Celery" },
+        { "sha": "b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1", "message": "Fix CORS for frontend" }
+      ]
+    },
+    {
+      "full_name": "janedemo/gitlytics",
+      "description": "Visualize GitHub collaboration",
+      "stargazers_count": 42,
+      "language": "JavaScript",
+      "updated_at": "2025-11-20T00:00:00Z",
+      "default_branch": "main",
+      "readme": "# Gitlytics\n\nVisualize GitHub collaboration data with D3.\n",
+      "files": [
+        {
+          "path": "src/oauth.js",
+          "content": "// GitHub OAuth flow\nconst token = await getAccessToken(code);\n"
+        }
+      ],
+      "commits": [
+        { "sha": "c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2", "message": "Add OAuth login" }
+      ]
+    },
+    {
+      "full_name": "janedemo/old-script",
+      "description": "tiny scratch repo",
+      "stargazers_count": 0,
+      "language": "Python",
+      "updated_at": "2019-01-01T00:00:00Z",
+      "default_branch": "master",
+      "readme": "",
+      "files": [
+        { "path": "scratch.py", "content": "print('hello')\n" }
+      ],
+      "commits": []
+    }
+  ]
+}

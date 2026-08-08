@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# LaTeX / render output (regenerated from Resume JSON — never commit)
+*.aux
+*.log
+*.out
+out/
+
+# Data / caches (Phase 1+: Chroma, corpus snapshots)
+data/
+
+# Secrets — never commit
+.env
+
+# Freebuff desktop app database (not project files)
+.freebuff/
