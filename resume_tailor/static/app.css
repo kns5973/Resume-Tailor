@@ -136,6 +136,19 @@ body {
   color: var(--accent-strong);
 }
 .btn-sample:hover { background: #e0e7ff; border-color: var(--accent); }
+/* Retailor flow: reuse picker + remembered profile hint */
+.reuse-row { border: 1px dashed #c7d2fe; border-radius: var(--radius-sm); background: var(--accent-soft); padding: 10px 12px; }
+.reuse-hint { font-size: 11px; color: var(--muted); font-weight: 400; }
+.reuse-row .sessions-filter { width: 100%; padding: 8px 10px; }
+.profile-hint {
+  margin: -4px 0 0;
+  font-size: 12px;
+  color: var(--success);
+  background: var(--success-soft);
+  border: 1px solid #a7f3d0;
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+}
 .build-progress { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
 .build-bar { height: 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
 .build-fill {

@@ -115,6 +115,14 @@ def test_save_load_roundtrip_newest_first(tmp_path):
     assert ids == ["b", "a"]  # newest first
 
 
+def test_record_roundtrips_jd_text(tmp_path):
+    """The raw job description is stored so a session can be re-tailored."""
+    rec = _record(jd_text="Senior Backend Engineer @ Acme\nRequirements: Redis")
+    save_record(rec, tmp_path)
+    loaded = load_record(rec.session_id, tmp_path)
+    assert loaded is not None and loaded.jd_text == "Senior Backend Engineer @ Acme\nRequirements: Redis"
+
+
 def test_load_records_ignores_corrupt_files(tmp_path):
     (tmp_path / "sessions").mkdir(exist_ok=True)
     (tmp_path / "sessions" / "good.json").write_text(_record(session_id="g").model_dump_json(), encoding="utf-8")

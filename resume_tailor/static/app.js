@@ -10,7 +10,18 @@ const state = {
   busy: false,
   imported: false, // read-only record view (no live artifacts/chat)
   progressTimer: null,
+  lastRecords: [], // cached session records (for the reuse picker + re-tailor)
 };
+
+/* Candidate profile: remembered in localStorage so retailoring for a new role
+   never means retyping name/email. Written on every successful run. */
+const PROFILE_KEY = "resume-tailor:profile";
+function loadProfile() {
+  try { return JSON.parse(localStorage.getItem(PROFILE_KEY) || "{}"); } catch (_) { return {}; }
+}
+function saveProfile(p) {
+  try { localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); } catch (_) { /* private mode */ }
+}
 
 /* ---------- helpers ---------- */
 
@@ -100,6 +111,7 @@ async function runPipeline() {
   fd.append("evidence_based", $("evidence-toggle").checked ? "true" : "false");
   if (fileInput.files && fileInput.files[0]) fd.append("previous_resume", fileInput.files[0]);
   try {
+    rememberProfile();  // retailoring a new role shouldn't retype name/email
     const payload = await apiForm("/api/run", fd);
     state.sessionId = payload.session_id;
     state.canUndo = payload.can_undo;
@@ -207,6 +219,9 @@ async function loadSessions() {
     const res = await fetch("/api/sessions" + sessionFilterParams());
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || res.statusText);
+    // keep a cache of ALL records (not just the filtered view) so the reuse
+    // picker and re-tailor buttons can look up any past job description.
+    if (!sessionFilterParams()) state.lastRecords = data.records || [];
     renderSessions(data);
   } catch (err) {
     $("sessions-list").innerHTML = `<div class="sessions-empty">Couldn't load sessions: ${esc(err.message)}</div>`;
@@ -231,6 +246,12 @@ function renderSessions(data) {
   list.innerHTML = records.map(sessionRow).join("");
   list.querySelectorAll("[data-open]").forEach((btn) => btn.addEventListener("click", () => openSession(btn.dataset.open)));
   list.querySelectorAll("[data-packet]").forEach((btn) => btn.addEventListener("click", () => window.open(`/api/sessions/${btn.dataset.packet}/packet`, "_blank")));
+  list.querySelectorAll("[data-retailor]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const rec = state.lastRecords.find((r) => r.session_id === btn.dataset.retailor);
+      openRunModal({ jdText: (rec && rec.jd_text) || "" });
+    })
+  );
 }
 
 function sessionRow(r) {
@@ -250,6 +271,7 @@ function sessionRow(r) {
       </div>
     </div>
     <div class="session-row-actions">
+      ${r.jd_text ? `<button class="btn" data-retailor="${esc(r.session_id)}" title="Re-tailor for a different job — keeps your profile, swaps the JD">↻ Re-tailor</button>` : ""}
       <button class="btn" data-open="${esc(r.session_id)}">Open</button>
       <button class="btn btn-primary" data-packet="${esc(r.session_id)}">Packet</button>
     </div>
@@ -375,12 +397,19 @@ function renderSessionTab(rec) {
       <p class="session-card-meta">Download a structured review packet: tailored resume changes (incl. education &amp; career), supporting evidence, weak areas, key questions, and recommended next actions.</p>
       <a class="btn btn-primary" href="/api/sessions/${esc(rec.session_id)}/packet" download>Download review packet</a>
     </div>
+    ${rec.jd_text ? `<div class="session-card">
+      <div class="session-card-title">Applying to a new role?</div>
+      <p class="session-card-meta">Re-tailor this resume for a different job description — your candidate profile carries over, and every claim is re-matched and re-verified from scratch.</p>
+      <button id="ses-retailor" class="btn btn-primary">↻ Re-tailor for a new job</button>
+    </div>` : ""}
   </div>`;
 
   const range = $("ses-confidence");
   const val = $("ses-confidence-val");
   range.addEventListener("input", () => { val.textContent = range.value + "/100"; });
   $("ses-save").addEventListener("click", saveSessionStatus);
+  const retailor = $("ses-retailor");
+  if (retailor) retailor.addEventListener("click", () => openRunModal({ jdText: rec.jd_text }));
 }
 
 async function saveSessionStatus() {
@@ -590,10 +619,102 @@ document.querySelectorAll(".tab").forEach((tab) => {
   });
 });
 
-/* ---------- wiring ---------- */
+/* ---------- run modal: profile prefill + reuse picker ---------- */
 
-$("btn-run").addEventListener("click", () => { hideError(); stopProgress(); $("run-modal").showModal(); });
-$("btn-run-welcome").addEventListener("click", () => { hideError(); stopProgress(); $("run-modal").showModal(); });
+const SAMPLE_JD_LABEL = "Sample: Senior Backend Engineer @ Acme";
+
+function prefillProfile() {
+  const p = loadProfile();
+  const nameEl = $("name");
+  const emailEl = $("email");
+  const githubEl = $("github");
+  if (p.name) nameEl.value = p.name;
+  if (p.email) emailEl.value = p.email;
+  if (p.github_username) githubEl.value = p.github_username;
+  if (typeof p.evidence_based === "boolean") $("evidence-toggle").checked = p.evidence_based;
+  const hint = $("profile-hint");
+  if (p.name || p.email || p.github_username) {
+    hint.textContent = "✓ Profile remembered from your last run — swap the job description and go.";
+    hint.classList.remove("hidden");
+  } else {
+    hint.classList.add("hidden");
+  }
+}
+
+function rememberProfile() {
+  saveProfile({
+    name: $("name").value.trim(),
+    email: $("email").value.trim(),
+    github_username: $("github").value.trim(),
+    evidence_based: $("evidence-toggle").checked,
+  });
+}
+
+/* Fill the "Reuse a previous job" select from the cached session records.
+   Distinct JD texts, most recent first, sample first. The option value IS the
+   JD text, so picking one just drops it into the textarea. */
+function renderReusePicker() {
+  const select = $("reuse-jd");
+  const seen = new Set();
+  const options = [];
+  if (SAMPLE_JD && !seen.has(SAMPLE_JD)) {
+    seen.add(SAMPLE_JD);
+    options.push(`<option value="${esc(SAMPLE_JD)}">${esc(SAMPLE_JD_LABEL)}</option>`);
+  }
+  for (const r of state.lastRecords) {
+    const text = (r.jd_text || "").trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    const label = ((r.jd_title || "Untitled JD") + (r.company ? " @ " + r.company : "")).slice(0, 60);
+    options.push(`<option value="${esc(text)}">${esc(label)}</option>`);
+  }
+  select.innerHTML = '<option value="">— choose a previous job description —</option>' + options.join("");
+  $("reuse-row").classList.toggle("hidden", options.length < 2); // need ≥2 to be useful
+}
+
+async function refreshReusePicker() {
+  try {
+    const res = await fetch("/api/sessions");
+    const data = await res.json();
+    if (res.ok) { state.lastRecords = data.records || []; }
+  } catch (_) { /* non-fatal */ }
+  renderReusePicker();
+}
+
+/* openRunModal(opts): open the run modal, pre-filled. opts.jdText carries the
+   re-tailor flow (title/submit reflect it); otherwise a fresh new run. */
+function openRunModal(opts = {}) {
+  hideError();
+  stopProgress();
+  prefillProfile();
+  const title = $("run-modal-title");
+  const sub = $("run-modal-sub");
+  if (opts.jdText) {
+    $("jd").value = opts.jdText;
+    title.textContent = "Re-tailor for a different job";
+    sub.textContent = "Your profile carries over — just swap the job description. Every claim is re-matched and re-verified against your evidence.";
+    $("run-submit").textContent = "Re-tailor resume";
+  } else {
+    $("jd").value = "";  // a fresh New run starts clean — stale JD text would mislead
+    title.textContent = "New run";
+    sub.textContent = "Paste a job description — every resume claim will be matched and verified against your evidence.";
+    $("run-submit").textContent = "Build verified resume";
+  }
+  refreshReusePicker();
+  $("reuse-jd").value = "";
+  $("run-modal").showModal();
+  $("jd").focus();
+}
+
+$("btn-run").addEventListener("click", () => openRunModal());
+$("btn-run-welcome").addEventListener("click", () => openRunModal());
+$("reuse-jd").addEventListener("change", (e) => {
+  const v = e.target.value;
+  if (!v) return;
+  $("jd").value = v;
+  hideError();
+  $("jd").focus();
+});
 $("modal-close").addEventListener("click", () => $("run-modal").close());
 $("btn-sample").addEventListener("click", () => {
   $("jd").value = SAMPLE_JD;

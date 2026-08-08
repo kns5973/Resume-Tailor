@@ -177,11 +177,14 @@ def _session_payload(session_id: str, chat: ChatSession, result: PipelineResult)
 # --------------------------------------------------------------------------
 
 class _WebSession:
-    def __init__(self, session_id: str, chat: ChatSession, result: PipelineResult, jobname: str) -> None:
+    def __init__(
+        self, session_id: str, chat: ChatSession, result: PipelineResult, jobname: str, jd_text: str = ""
+    ) -> None:
         self.session_id = session_id
         self.chat = chat
         self.result = result
         self.jobname = jobname
+        self.jd_text = jd_text
 
 
 def create_app(
@@ -210,7 +213,12 @@ def create_app(
         """Snapshot the current session to disk, preserving user-set tracking
         fields (confidence/note/status override) across updates."""
         fresh = sessions.record_from_result(
-            ws.session_id, ws.result, ws.chat.resume, _transcript(ws.chat), has_chat_edits=bool(ws.chat.log)
+            ws.session_id,
+            ws.result,
+            ws.chat.resume,
+            _transcript(ws.chat),
+            has_chat_edits=bool(ws.chat.log),
+            jd_text=ws.jd_text,
         )
         existing = sessions.load_record(ws.session_id, corpus_dir)
         if existing is not None:
@@ -270,7 +278,9 @@ def create_app(
             embedder=embedder,
             match_config=MatchConfig(use_keywords=True),
         )
-        web_sessions[session_id] = _WebSession(session_id, chat, result, jobname=session_jobname)
+        web_sessions[session_id] = _WebSession(
+            session_id, chat, result, jobname=session_jobname, jd_text=req["jd_text"]
+        )
         _persist_session(web_sessions[session_id])
         return _session_payload(session_id, chat, result)
 

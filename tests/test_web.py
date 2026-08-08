@@ -341,6 +341,8 @@ def test_sessions_listed_after_run_with_filters(tmp_path):
     assert len(client.get("/api/sessions", params={"q": "queue"}).json()["records"]) == 1
     assert len(client.get("/api/sessions", params={"q": "Acme"}).json()["records"]) == 1
     assert len(client.get("/api/sessions", params={"q": "zzz"}).json()["records"]) == 0
+    # the raw JD text is stored and listed, so the UI can re-tailor this session
+    assert rec["jd_text"] == JD_TEXT
     # facet filters
     assert len(client.get("/api/sessions", params={"status": "verified"}).json()["records"]) == 1
     assert len(client.get("/api/sessions", params={"status": "draft"}).json()["records"]) == 0

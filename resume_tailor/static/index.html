@@ -25,8 +25,18 @@
 
   <dialog id="run-modal" class="modal">
     <form id="run-form">
-      <h2 class="modal-title">New run</h2>
-      <p class="modal-sub">Paste a job description — every resume claim will be matched and verified against your evidence.</p>
+      <h2 id="run-modal-title" class="modal-title">New run</h2>
+      <p id="run-modal-sub" class="modal-sub">Paste a job description — every resume claim will be matched and verified against your evidence.</p>
+
+      <div id="reuse-row" class="field reuse-row hidden">
+        <div class="field-head">
+          <span class="field-label">Re-tailor an earlier job</span>
+          <span class="reuse-hint">pick a past JD — your profile carries over</span>
+        </div>
+        <select id="reuse-jd" class="sessions-filter" title="Reuse a previous job description">
+          <option value="">— choose a previous job description —</option>
+        </select>
+      </div>
 
       <div class="field">
         <div class="field-head">
@@ -44,13 +54,14 @@
       <div class="grid-2">
         <label class="field">
           <span class="field-label">Candidate name</span>
-          <input id="name" value="Jake Ryan" autocomplete="off">
+          <input id="name" autocomplete="off">
         </label>
         <label class="field">
           <span class="field-label">Email</span>
-          <input id="email" value="jake@su.edu" autocomplete="off">
+          <input id="email" autocomplete="off">
         </label>
       </div>
+      <p id="profile-hint" class="profile-hint hidden"></p>
 
       <label class="field">
         <span class="field-label">GitHub username <em class="optional">optional — collect a live corpus</em></span>

@@ -37,6 +37,7 @@ class SessionRecord(BaseModel):
     candidate_name: str = ""
     jd_title: str = ""
     company: str = ""
+    jd_text: str = Field(default="", description="the raw job description, so a session can be re-tailored")
     topic: str = ""
     evidence_based: bool = True
     status: SessionStatus = "draft"
@@ -109,6 +110,7 @@ def record_from_result(
     *,
     created_at: str | None = None,
     has_chat_edits: bool | None = None,
+    jd_text: str = "",
 ) -> SessionRecord:
     """Snapshot a finished run into a SessionRecord.
 
@@ -130,6 +132,7 @@ def record_from_result(
         candidate_name=resume.name or "",
         jd_title=result.jd.title or "",
         company=result.jd.company or "",
+        jd_text=jd_text or "",
         topic=(result.jd.title or "").strip() or "Untitled JD",
         evidence_based=evidence_based,
         status=derive_status(evidence_based, bullets_verified, has_chat),
