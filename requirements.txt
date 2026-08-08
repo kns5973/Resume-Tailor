@@ -11,6 +11,7 @@ pydantic>=2.7
 jinja2>=3.1
 requests>=2.31
 
+
 # --- phase1 (ingestion + retrieval; pulls torch via sentence-transformers) ---
 pygithub>=2.3
 pdfplumber>=0.11
