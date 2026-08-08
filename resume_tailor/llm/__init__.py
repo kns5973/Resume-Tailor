@@ -166,6 +166,38 @@ class GroqClient:
             time.sleep(min(delay, 15.0))
         return resp  # pragma: no cover — the loop always returns
 
+    @staticmethod
+    def _friendly_http_error(model: str, resp: requests.Response | None, exc: requests.RequestException) -> str:
+        """Turn a provider HTTP failure into a readable message.
+
+        429s (rate limits) are the common free-tier failure. Groq returns
+        {"error": {"message": "..."}} — that message is already the human-
+        readable sentence ("Rate limit reached for model ... Please try again
+        in 59m."), so parse it whole rather than slicing on punctuation (a
+        naive split on "." would truncate at the model-version dot, e.g.
+        `llama-3.3`).
+        """
+        if resp is None:
+            return f"Groq API error ({model}): {exc}"
+        if resp.status_code == 429:
+            body = resp.text or ""
+            try:
+                message = json.loads(body).get("error", {}).get("message", "")
+            except json.JSONDecodeError:
+                message = ""
+            if not message:
+                # Non-JSON fallback: keep the sentence up to the first full stop.
+                for marker in ("Rate limit reached", "rate limit reached", "quota"):
+                    idx = body.find(marker)
+                    if idx != -1:
+                        message = body[idx:].split(". ", 1)[0]
+                        break
+            return (
+                f"Groq rate limit ({model}): {message} "
+                "This resets soon, or upgrade the Groq tier for more tokens/day."
+            )
+        return f"Groq API error ({model}): HTTP {resp.status_code}: {resp.text[:200]}"
+
     def complete_json(self, *, task: str, system: str, prompt: str) -> dict:
         model = model_name_for(task)
         payload = {
@@ -183,11 +215,7 @@ class GroqClient:
             resp = self._post(payload, {"Authorization": f"Bearer {self._api_key}"})
             resp.raise_for_status()
         except requests.RequestException as exc:
-            if resp is not None:
-                detail = f"HTTP {resp.status_code}: {resp.text[:300]}"
-            else:
-                detail = str(exc)
-            raise LLMError(f"Groq API error ({model}): {detail}") from exc
+            raise LLMError(self._friendly_http_error(model, resp, exc)) from exc
         content = resp.json()["choices"][0]["message"]["content"]
         return _parse_json(content)
 

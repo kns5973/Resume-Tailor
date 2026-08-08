@@ -156,6 +156,43 @@ def test_run_with_previous_resume_multipart(tmp_path):
     assert "resume:old#technical-skills" in graph.sources
 
 
+def test_run_surfaces_llm_error_friendly(tmp_path):
+    """A provider failure (e.g. Groq 429 rate limit) becomes a diagnosable 502
+    with the real message — not a bare 'Internal Server Error'."""
+    from resume_tailor.llm import LLMError
+
+    def boom():
+        raise LLMError("Groq API error (llama-3.3-70b-versatile): HTTP 429: rate limit reached")
+
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir(parents=True, exist_ok=True)
+    from resume_tailor.collector.vector_store import VectorStore
+
+    store = VectorStore(path=corpus_dir / "chroma")
+    emb = FakeEmbedder(dim=256)
+    store.add(
+        ids=[f"{EID}#chunk0"],
+        embeddings=emb.embed([SNIPPET]),
+        documents=[SNIPPET],
+        metadatas=[{"source_id": EID, "source_type": "code", "skill_tags": "redis"}],
+    )
+    graph = EvidenceGraph()
+    graph.add_source(Evidence(source_id=EID, source_type="code", snippet=SNIPPET, skill_tags=["redis"]))
+    graph.add_chunk(EvidenceChunk(chunk_id=f"{EID}#chunk0", source_id=EID, text=SNIPPET))
+    (corpus_dir / "evidence_graph.json").write_text(graph.model_dump_json(), encoding="utf-8")
+
+    app = create_app(
+        client_factory=boom,
+        embedder_factory=lambda: FakeEmbedder(dim=256),
+        corpus_dir=corpus_dir,
+        out_dir=tmp_path / "out",
+        jobname="web_resume",
+    )
+    res = TestClient(app).post("/api/run", json={"jd_text": JD_TEXT, "evidence_based": False})
+    assert res.status_code == 502
+    assert "rate limit" in res.json()["detail"]
+
+
 def test_run_rejects_non_pdf_previous_resume(tmp_path):
     """A non-PDF upload gets a friendly 400, not a raw 500."""
     res = _app(tmp_path).post(

@@ -30,7 +30,7 @@ from resume_tailor import sessions
 from resume_tailor.chat import ChatSession
 from resume_tailor.collector import CollectorInput, SentenceTransformerEmbedder, VectorStore
 from resume_tailor.collector.embed import Embedder
-from resume_tailor.llm import LLMClient, get_client
+from resume_tailor.llm import LLMClient, LLMError, get_client
 from resume_tailor.matcher import MatchConfig
 from resume_tailor.pipeline import PipelineResult, PreviousResumeError, run_full
 from resume_tailor.render.latex import render_resume
@@ -248,12 +248,12 @@ def create_app(
             if req["github_username"].strip()
             else None
         )
-        client = client_factory()
         embedder = embedder_factory()
         header = ResumeHeader(name=req["name"], contact=req["contact"])
         session_id = uuid.uuid4().hex[:12]
         session_jobname = f"web_{session_id}"
         try:
+            client = client_factory()
             result = run_full(
                 req["jd_text"],
                 header,
@@ -268,6 +268,10 @@ def create_app(
             )
         except PreviousResumeError as exc:
             raise HTTPException(400, str(exc)) from exc
+        except LLMError as exc:
+            # A provider failure (e.g. Groq rate limit) is a real, diagnosable
+            # error — surface it to the UI instead of a bare 500.
+            raise HTTPException(502, f"LLM provider error: {exc}") from exc
         graph_path = corpus_dir / "evidence_graph.json"
         graph = EvidenceGraph.model_validate_json(graph_path.read_text(encoding="utf-8")) if graph_path.exists() else EvidenceGraph()
         chat = ChatSession(
@@ -287,7 +291,10 @@ def create_app(
     @app.post("/api/chat")
     def chat(req: ChatRequest) -> dict:
         ws = _get(req.session_id)
-        result = ws.chat.send(req.message)
+        try:
+            result = ws.chat.send(req.message)
+        except LLMError as exc:
+            raise HTTPException(502, f"LLM provider error: {exc}") from exc
         if result.applied:
             _rerender(ws)  # efficiency rule #5: recompile only on applied sends
         _persist_session(ws)

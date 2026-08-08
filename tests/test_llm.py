@@ -148,8 +148,29 @@ def test_max_tokens_env_override(monkeypatch):
 def test_groq_client_http_error_raises_llm_error(monkeypatch):
     monkeypatch.setattr("requests.post", lambda *a, **k: _FakeResponse(429, text="rate limited"))
     client = GroqClient(api_key="gsk-test", retry_backoff=0)
-    with pytest.raises(LLMError, match="429"):
+    with pytest.raises(LLMError, match="rate limit"):
         client.complete_json(task="jd_parser", system="s", prompt="p")
+
+
+def test_groq_client_429_message_is_human_readable(monkeypatch):
+    """A quota error surfaces as a readable sentence, not a JSON wall — the UI
+    shows this message directly to the user."""
+    body = (
+        '{"error":{"message":"Rate limit reached for model `llama-3.3-70b-versatile` '
+        'in organization `org_x` service tier `on_demand` on tokens per day (TPD): '
+        'Limit 100000, Used 99710, Requested 5639. Please try again in 59m."}}'
+    )
+    monkeypatch.setattr("requests.post", lambda *a, **k: _FakeResponse(429, text=body))
+    client = GroqClient(api_key="gsk-test", retry_backoff=0)
+    with pytest.raises(LLMError) as excinfo:
+        client.complete_json(task="jd_parser", system="s", prompt="p")
+    msg = str(excinfo.value)
+    assert "Groq rate limit (llama-3.1-8b-instant)" in msg  # jd_parser is the fast tier
+    # the useful quota details SURVIVE (a naive split on the model-version dot
+    # would truncate at `llama-3.3` and drop these)
+    assert "Requested 5639" in msg
+    assert "Limit 100000" in msg
+    assert "upgrade the Groq tier" in msg
 
 
 def test_groq_client_retries_429_then_succeeds(monkeypatch):
@@ -176,7 +197,7 @@ def test_groq_client_honors_retry_after(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda s: sleeps.append(s))
     monkeypatch.setattr("requests.post", lambda *a, **k: _FakeResponse(429, text="slow down", headers={"Retry-After": "1"}))
     client = GroqClient(api_key="gsk-test", retry_backoff=0)  # backoff would sleep 0 — header forces 1s
-    with pytest.raises(LLMError, match="429"):
+    with pytest.raises(LLMError, match="rate limit"):
         client.complete_json(task="jd_parser", system="s", prompt="p")
     assert sleeps == [1.0, 1.0]  # Retry-After honored, not the 0 backoff
 
