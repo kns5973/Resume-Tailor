@@ -29,6 +29,15 @@ async function api(path, body) {
   return data;
 }
 
+async function apiForm(path, formData) {
+  // multipart/form-data: the browser sets the boundary header itself
+  const res = await fetch(path, { method: "POST", body: formData });
+  let data = {};
+  try { data = await res.json(); } catch (_) { /* non-JSON */ }
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+
 function setBusy(b) {
   state.busy = b;
   $("chat-send").disabled = b || !state.sessionId;
@@ -82,14 +91,16 @@ async function runPipeline() {
   hideError();
   setBusy(true);
   startProgress();
+  const fileInput = $("prev-resume");
+  const fd = new FormData();
+  fd.append("jd_text", jd);
+  fd.append("name", $("name").value.trim() || "Candidate Name");
+  fd.append("contact", JSON.stringify({ email: $("email").value.trim() }));
+  fd.append("github_username", $("github").value.trim());
+  fd.append("evidence_based", $("evidence-toggle").checked ? "true" : "false");
+  if (fileInput.files && fileInput.files[0]) fd.append("previous_resume", fileInput.files[0]);
   try {
-    const payload = await api("/api/run", {
-      jd_text: jd,
-      name: $("name").value.trim() || "Candidate Name",
-      contact: { email: $("email").value.trim() },
-      github_username: $("github").value.trim(),
-      evidence_based: $("evidence-toggle").checked,
-    });
+    const payload = await apiForm("/api/run", fd);
     state.sessionId = payload.session_id;
     state.canUndo = payload.can_undo;
     state.imported = false;

@@ -2,6 +2,8 @@
 factories + a tiny persisted corpus (no torch, no network)."""
 import json
 
+from tests._pdf_helper import minimal_pdf
+
 from fastapi.testclient import TestClient
 
 from resume_tailor.collector.embed import FakeEmbedder
@@ -127,6 +129,70 @@ def test_run_end_to_end(tmp_path):
 def test_run_requires_jd(tmp_path):
     res = _app(tmp_path).post("/api/run", json={"jd_text": "  "})
     assert res.status_code == 400
+
+
+def test_run_with_previous_resume_multipart(tmp_path):
+    """Attaching a previous resume via multipart upload: sections are ingested
+    as citeable evidence and the builder is given the format reference."""
+    client = _app(tmp_path)
+    prev_pdf = minimal_pdf(["CAREER OBJECTIVE", "Seeking a backend role.", "TECHNICAL SKILLS", "Python, Redis, Docker"])
+    res = client.post(
+        "/api/run",
+        data={
+            "jd_text": JD_TEXT,
+            "name": "Jake Ryan",
+            "contact": json.dumps({"email": "j@x.com"}),
+        },
+        files={"previous_resume": ("old_resume.pdf", prev_pdf, "application/pdf")},
+    )
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    assert payload["stats"]["matched"] == 1
+    # the uploaded resume's sections became part of the persisted evidence graph
+    graph = EvidenceGraph.model_validate_json(
+        (tmp_path / "corpus" / "evidence_graph.json").read_text(encoding="utf-8")
+    )
+    assert "resume:old#career-objective" in graph.sources
+    assert "resume:old#technical-skills" in graph.sources
+
+
+def test_run_rejects_non_pdf_previous_resume(tmp_path):
+    """A non-PDF upload gets a friendly 400, not a raw 500."""
+    res = _app(tmp_path).post(
+        "/api/run",
+        data={"jd_text": JD_TEXT, "name": "Jake Ryan"},
+        files={"previous_resume": ("old.docx", b"% not a pdf at all", "application/pdf")},
+    )
+    assert res.status_code == 400
+    assert "PDF" in res.json()["detail"]
+
+
+def test_run_requires_corpus_or_previous_resume(tmp_path):
+    """The empty-corpus guard is relaxed when a previous resume is uploaded:
+    a resume alone can seed a run."""
+    corpus_dir = tmp_path / "empty_corpus"
+    corpus_dir.mkdir(parents=True, exist_ok=True)
+    app = create_app(
+        client_factory=_client_factory,
+        embedder_factory=lambda: FakeEmbedder(dim=256),
+        corpus_dir=corpus_dir,
+        out_dir=tmp_path / "out",
+        jobname="web_resume",
+    )
+    tc = TestClient(app)
+    # no corpus, no github username, no previous resume -> 400
+    assert tc.post("/api/run", json={"jd_text": JD_TEXT}).status_code == 400
+    # a previous resume alone unlocks the run
+    prev_pdf = minimal_pdf(["CAREER OBJECTIVE", "Seeking a backend role."])
+    res = tc.post(
+        "/api/run",
+        data={"jd_text": JD_TEXT, "name": "Jake Ryan"},
+        files={"previous_resume": ("old.pdf", prev_pdf, "application/pdf")},
+    )
+    assert res.status_code == 200, res.text
+    # the uploaded resume alone seeded the corpus (previously it was empty)
+    graph = EvidenceGraph.model_validate_json((corpus_dir / "evidence_graph.json").read_text(encoding="utf-8"))
+    assert "resume:old#career-objective" in graph.sources
 
 
 def test_chat_rewrite_applies(tmp_path):

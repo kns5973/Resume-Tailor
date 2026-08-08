@@ -37,6 +37,7 @@ web = [
     # validated against).
     "chromadb>=1.0",
     "sentence-transformers>=3.0",  # pulls torch
+    "python-multipart>=0.0.9",  # FastAPI request.form() (previous-resume upload)
 ]
 
 [tool.setuptools.package-data]

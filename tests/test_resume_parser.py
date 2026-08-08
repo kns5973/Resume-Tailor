@@ -2,7 +2,8 @@ from unittest import mock
 
 import pytest
 
-from resume_tailor.collector.resume_parser import parse_resume_pdf
+from resume_tailor.collector.resume_parser import parse_resume_pdf, parse_resume_pdf_sections, parse_resume_sections
+from tests._pdf_helper import minimal_pdf
 
 
 class _FakePage:
@@ -51,3 +52,56 @@ def test_parse_real_rendered_pdf(tmp_path):
 def test_missing_file_raises():
     with pytest.raises(Exception):
         parse_resume_pdf("does_not_exist.pdf")
+
+
+# --------------------------------------------------------------------------
+# Section-aware parsing (previous resume as format/content reference)
+# --------------------------------------------------------------------------
+
+
+def test_section_headers_split_into_named_sources(monkeypatch):
+    fake = _FakePDF(
+        [
+            _FakePage("CAREER OBJECTIVE\nTo build reliable software for learners."),
+            _FakePage("TECHNICAL SKILLS\nPython, Redis, Docker"),
+        ]
+    )
+    monkeypatch.setattr("pdfplumber.open", lambda path: fake)
+
+    sections, artifacts = parse_resume_pdf_sections("old_resume.pdf")
+    assert [s["title"] for s in sections] == ["CAREER OBJECTIVE", "TECHNICAL SKILLS"]
+    assert [s["source_id"] for s in sections] == ["resume:old#career-objective", "resume:old#technical-skills"]
+    assert sections[0]["text"] == "To build reliable software for learners."
+    assert sections[1]["text"] == "Python, Redis, Docker"
+
+    # artifacts mirror the sections so builder citations resolve in the graph
+    assert [a.evidence.source_id for a in artifacts] == ["resume:old#career-objective", "resume:old#technical-skills"]
+    assert all(a.evidence.source_type == "resume" for a in artifacts)
+    assert artifacts[0].chunks[0].source_id == "resume:old#career-objective"
+
+
+def test_parse_resume_pdf_uses_sections_when_headers_present(monkeypatch):
+    fake = _FakePDF([_FakePage("SUMMARY\nSeasoned engineer.\nEDUCATION\nBSc Computer Science")])
+    monkeypatch.setattr("pdfplumber.open", lambda path: fake)
+    artifacts = parse_resume_pdf("old.pdf")
+    assert [a.evidence.source_id for a in artifacts] == ["resume:old#summary", "resume:old#education"]
+
+
+def test_parse_real_previous_resume_pdf(tmp_path):
+    """Integration: a real (minimal) PDF is sectioned the same way as text."""
+    pdf = minimal_pdf(["CAREER OBJECTIVE", "To build reliable software.", "TECHNICAL SKILLS", "Python, Redis, Docker"])
+    path = tmp_path / "old.pdf"
+    path.write_bytes(pdf)
+    sections, artifacts = parse_resume_pdf_sections(path)
+    assert [s["source_id"] for s in sections] == ["resume:old#career-objective", "resume:old#technical-skills"]
+    assert len(artifacts) == 2
+    assert "To build reliable software." in artifacts[0].evidence.snippet
+
+
+def test_parse_resume_sections_without_headers_returns_single_section():
+    sections = parse_resume_sections("Just some unstructured resume text.")
+    assert sections == [{"title": "Previous Resume", "source_id": "resume:old", "text": "Just some unstructured resume text."}]
+
+
+def test_empty_text_returns_single_empty_section():
+    assert parse_resume_sections("") == [{"title": "Previous Resume", "source_id": "resume:old", "text": ""}]

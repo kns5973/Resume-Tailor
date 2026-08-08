@@ -22,7 +22,14 @@ BUILDER_SYSTEM = (
     "strictly supported by the provided evidence snippets and must cite its "
     "evidence via the provided evidence_id values. Never invent achievements, "
     "numbers, employers, or skills that are not in the evidence; if evidence "
-    "is thin, write honest, modest bullets. Respond with ONLY JSON matching: "
+    "is thin, write honest, modest bullets. "
+    "A PREVIOUS RESUME is provided as a format reference and fallback content: "
+    "mirror its section structure and formatting (e.g. a Career Objective or "
+    "Summary section). For a section that has no evidence-backed content from "
+    "the matched requirements, you MAY write it from the previous resume's "
+    "corresponding section and cite that section's evidence_id. Never invent "
+    "content that appears in neither the matched evidence nor the previous "
+    "resume. Respond with ONLY JSON matching: "
     '{"sections": [{"title": str, "entries": [{"entry_type": "job" | "education" '
     '| "project", "title": str, "subtitle": str, "location": str, "dates": str, '
     '"bullets": [{"text": str, "evidence_ids": [str]}]}]}]}. The candidate name '
@@ -32,6 +39,24 @@ BUILDER_SYSTEM = (
 
 _MAX_EVIDENCE_PER_REQ = 3  # keep the prompt small: 3 best hits per requirement
 _SNIPPET_LEN = 200
+_PREV_SECTION_LEN = 600  # per-section cap for the previous-resume block
+
+
+def _previous_resume_lines(previous_resume: list[dict] | None) -> str:
+    """Format the previous resume as a format-reference + fallback block.
+
+    Every section carries an evidence_id (= its source_id) so the model can
+    cite ``resume:old#<section>`` and the Verifier can resolve it.
+    """
+    if not previous_resume:
+        return ""
+    lines = ["Previous resume (FORMAT REFERENCE + fallback content for sections with no matched evidence):"]
+    for section in previous_resume:
+        title = section.get("title", "Section")
+        source_id = section.get("source_id", "resume:old")
+        text = section.get("text", "").replace("\n", " ")[:_PREV_SECTION_LEN]
+        lines.append(f"- ## {title}  [evidence_id={source_id}]  \"{text}\"")
+    return "\n".join(lines)
 
 
 def _evidence_lines(match_result: MatchResult) -> str:
@@ -62,6 +87,7 @@ def generate_resume(
     client: LLMClient | None = None,
     max_retries: int = 1,
     feedback: str = "",
+    previous_resume: list[dict] | None = None,
 ) -> Resume:
     """Generate a draft Resume from matched requirements and evidence.
 
@@ -75,6 +101,9 @@ def generate_resume(
     if jd.company:
         prompt += f" at {jd.company}"
     prompt += f"\n\nMatched requirements and evidence:\n{_evidence_lines(match_result)}"
+    prev = _previous_resume_lines(previous_resume)
+    if prev:
+        prompt += f"\n\n{prev}"
     if feedback:
         prompt += f"\n\nREVISION FEEDBACK FROM THE VERIFIER (address every point):\n{feedback}"
 

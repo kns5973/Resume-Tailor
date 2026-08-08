@@ -19,6 +19,7 @@ from resume_tailor.schemas import (
     ResumeHeader,
 )
 from resume_tailor.verifier import iter_bullets
+from tests._pdf_helper import minimal_pdf
 
 EID = "repo:acme#file:queue.py#L45"
 SNIPPET = "Built a Redis-backed job queue with retries"
@@ -340,6 +341,60 @@ def test_run_full_draft_vs_verified_mode_flags(tmp_path):
     assert draft.stats["bullets_verified"] == 0  # draft bullets are unverified
     assert verified.build_result.verification.verdicts  # verifier ran
     assert draft.build_result.verification.verdicts == []
+
+
+def test_run_full_with_previous_resume(tmp_path):
+    """A previous resume PDF: its sections become citeable graph evidence and
+    reach the builder as format reference + fallback content."""
+    corpus_dir, emb = _write_corpus(tmp_path)
+    prev_pdf = tmp_path / "old_resume.pdf"
+    prev_pdf.write_bytes(minimal_pdf(["CAREER OBJECTIVE", "Seeking a backend role.", "TECHNICAL SKILLS", "Python, Redis, Docker"]))
+    client = _client_with_jd()
+    result = run_full(
+        "Senior Backend Engineer @ Acme, Redis queues",
+        ResumeHeader(name="Jake Ryan"),
+        client=client,
+        corpus_dir=corpus_dir,
+        out_dir=tmp_path / "out",
+        jobname="verified",
+        embedder=emb,
+        previous_resume=prev_pdf,
+    )
+    assert result.pdf is not None and result.pdf.read_bytes()[:4] == b"%PDF"
+    assert result.stats["bullets_verified"] == 1
+    # previous-resume sections were merged into the persisted graph (additive)
+    graph = EvidenceGraph.model_validate_json((corpus_dir / "evidence_graph.json").read_text(encoding="utf-8"))
+    assert "resume:old#career-objective" in graph.sources
+    assert "resume:old#technical-skills" in graph.sources
+    # ...and the builder prompt carried them as format reference + fallback
+    # (titles preserve their original case from the PDF, e.g. CAREER OBJECTIVE)
+    build_prompts = [c[2] for c in client.calls if c[0] == "bullet_generation"]
+    assert build_prompts and "CAREER OBJECTIVE" in build_prompts[0]
+    assert "resume:old#career-objective" in build_prompts[0]
+
+
+def test_run_full_previous_resume_without_headers_falls_back_to_pages(tmp_path):
+    """A resume PDF without recognizable section headers still ingests (per-page
+    fallback) and yields no builder sections."""
+    corpus_dir, emb = _write_corpus(tmp_path)
+    prev_pdf = tmp_path / "plain_resume.pdf"
+    prev_pdf.write_bytes(minimal_pdf(["Jake Ryan", "Just some unstructured text here."]))
+    client = _client_with_jd()
+    result = run_full(
+        "Senior Backend Engineer @ Acme, Redis queues",
+        ResumeHeader(name="Jake Ryan"),
+        client=client,
+        corpus_dir=corpus_dir,
+        out_dir=tmp_path / "out",
+        jobname="verified",
+        embedder=emb,
+        previous_resume=prev_pdf,
+    )
+    # per-page sources landed in the graph; no FORMAT REFERENCE block (no sections)
+    graph = EvidenceGraph.model_validate_json((corpus_dir / "evidence_graph.json").read_text(encoding="utf-8"))
+    assert any(sid.startswith("resume:old#page") for sid in graph.sources)
+    build_prompts = [c[2] for c in client.calls if c[0] == "bullet_generation"]
+    assert build_prompts and "FORMAT REFERENCE" not in build_prompts[0]
 
 
 def test_run_full_empty_corpus_is_all_gaps():

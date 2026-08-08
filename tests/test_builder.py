@@ -98,6 +98,28 @@ def test_builder_prompt_includes_evidence_and_feedback():
     assert "unsupported claim" in prompt  # revision feedback reaches the builder
 
 
+def test_builder_prompt_includes_previous_resume_sections():
+    """The previous resume arrives as format reference + fallback content,
+    each section carrying its evidence_id so citations resolve for the verifier."""
+    client = MockLLMClient({"bullet_generation": [json.dumps(GOOD_SECTIONS)]})
+    previous_resume = [
+        {"title": "Career Objective", "source_id": "resume:old#career-objective", "text": "Seeking a backend role."},
+        {"title": "Technical Skills", "source_id": "resume:old#technical-skills", "text": "Python, Redis, Docker"},
+    ]
+    generate_resume(_jd(), _match_result(), ResumeHeader(name="Jake"), client=client, previous_resume=previous_resume)
+    prompt = client.calls[0][2]
+    assert "FORMAT REFERENCE" in prompt
+    assert "Career Objective" in prompt and "Seeking a backend role." in prompt
+    assert "resume:old#career-objective" in prompt  # citeable evidence_id for the verifier
+    assert "resume:old#technical-skills" in prompt
+
+
+def test_builder_prompt_omits_previous_resume_when_none():
+    client = MockLLMClient({"bullet_generation": [json.dumps(GOOD_SECTIONS)]})
+    generate_resume(_jd(), _match_result(), ResumeHeader(name="Jake"), client=client)
+    assert "FORMAT REFERENCE" not in client.calls[0][2]
+
+
 def test_builder_retries_once_on_bad_output():
     client = MockLLMClient({"bullet_generation": ["not json", json.dumps(GOOD_SECTIONS)]})
     resume = generate_resume(_jd(), _match_result(), ResumeHeader(name="Jake"), client=client)

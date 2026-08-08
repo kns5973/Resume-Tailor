@@ -16,6 +16,7 @@ from pathlib import Path
 from resume_tailor.builder import generate_resume
 from resume_tailor.collector import CollectorInput, SentenceTransformerEmbedder, VectorStore, collect_sync
 from resume_tailor.collector.embed import Embedder
+from resume_tailor.collector.resume_parser import parse_resume_pdf_sections
 from resume_tailor.jd_parser import parse_jd
 from resume_tailor.llm import LLMClient, get_client
 from resume_tailor.matcher import MatchConfig, match_jd
@@ -99,6 +100,7 @@ def build_verified_resume(
     client: LLMClient | None = None,
     graph: EvidenceGraph | None = None,
     max_revisions: int = _MAX_REVISIONS,
+    previous_resume: list[dict] | None = None,
 ) -> BuildResult:
     """Build a verified Resume via the bounce loop (≤ max_revisions revisions).
 
@@ -109,14 +111,16 @@ def build_verified_resume(
     adjudicated when no graph is supplied).
     """
     client = client or get_client()
-    draft = generate_resume(jd, match_result, header, client=client)
+    draft = generate_resume(jd, match_result, header, client=client, previous_resume=previous_resume)
     verification = verify_resume(draft, client=client, graph=graph)
     revisions = 0
     dropped: list[DroppedBullet] = []
     while verification.failed and revisions < max_revisions:
         _record_dropped(dropped, verification)  # cuts from this round stay in the trace
         revisions += 1
-        draft = generate_resume(jd, match_result, header, client=client, feedback=_feedback(verification))
+        draft = generate_resume(
+            jd, match_result, header, client=client, feedback=_feedback(verification), previous_resume=previous_resume
+        )
         verification = verify_resume(draft, client=client, graph=graph)
     _record_dropped(dropped, verification)  # final round's cuts
     final = _apply_verdicts(draft, verification)
@@ -154,6 +158,48 @@ class PipelineResult:
     stats: dict
 
 
+class PreviousResumeError(Exception):
+    """Raised when a previous-resume upload cannot be parsed (e.g. not a PDF).
+
+    The web layer catches this and returns a friendly 400 instead of a 500.
+    """
+
+
+def _ingest_previous_resume(
+    path: str | Path,
+    store: VectorStore,
+    graph: EvidenceGraph,
+    corpus_dir: Path,
+    embedder: Embedder,
+) -> list[dict]:
+    """Parse an old resume into sectioned evidence, merge into graph + store.
+
+    Returns the section list ({title, source_id, text}) for the Builder. The
+    merge is additive: existing corpus sources stay untouched (a fresh collect
+    would rebuild the graph from scratch and drop them).
+    """
+    try:
+        sections, artifacts = parse_resume_pdf_sections(path)
+    except Exception as exc:
+        raise PreviousResumeError(f"Could not parse the previous resume: {exc}") from exc
+    if not artifacts:
+        return []
+    texts: list[str] = []
+    ids: list[str] = []
+    metadatas: list[dict] = []
+    for artifact in artifacts:
+        graph.add_source(artifact.evidence)
+        for chunk in artifact.chunks:
+            graph.add_chunk(chunk)
+            texts.append(chunk.text)
+            ids.append(chunk.chunk_id)
+            metadatas.append({"source_id": artifact.evidence.source_id, "source_type": "resume", "skill_tags": ""})
+    if texts:
+        store.add(ids=ids, embeddings=embedder.embed(texts), documents=texts, metadatas=metadatas)
+        (corpus_dir / "evidence_graph.json").write_text(graph.model_dump_json(indent=2), encoding="utf-8")
+    return sections
+
+
 def run_full(
     jd_text: str,
     header: ResumeHeader,
@@ -166,6 +212,7 @@ def run_full(
     embedder: Embedder | None = None,
     match_config: MatchConfig | None = None,
     evidence_based: bool = True,
+    previous_resume: str | Path | None = None,
 ) -> PipelineResult:
     """Full pipeline: (collect corpus) -> parse JD -> match -> build -> verify -> PDF.
 
@@ -194,13 +241,19 @@ def run_full(
         graph = _load_graph(corpus_dir)
 
     embedder = embedder or SentenceTransformerEmbedder()
+    prev_sections: list[dict] = []
+    if previous_resume:
+        prev_sections = _ingest_previous_resume(previous_resume, store, graph, corpus_dir, embedder)
+
     match_config = match_config or MatchConfig(use_keywords=True)  # hybrid retrieval on by default
     jd = parse_jd(jd_text, client=client)
     match_result = match_jd(jd, store, embedder, client=client, config=match_config)
     if evidence_based:
-        build = build_verified_resume(jd, match_result, header, client=client, graph=graph)
+        build = build_verified_resume(
+            jd, match_result, header, client=client, graph=graph, previous_resume=prev_sections
+        )
     else:
-        draft = generate_resume(jd, match_result, header, client=client)
+        draft = generate_resume(jd, match_result, header, client=client, previous_resume=prev_sections)
         build = BuildResult(
             resume=draft,
             draft=draft,

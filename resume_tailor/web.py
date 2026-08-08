@@ -16,11 +16,12 @@ The PDF is re-rendered on applied chat sends only (efficiency rule #5).
 """
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from typing import Callable
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -31,7 +32,7 @@ from resume_tailor.collector import CollectorInput, SentenceTransformerEmbedder,
 from resume_tailor.collector.embed import Embedder
 from resume_tailor.llm import LLMClient, get_client
 from resume_tailor.matcher import MatchConfig
-from resume_tailor.pipeline import PipelineResult, run_full
+from resume_tailor.pipeline import PipelineResult, PreviousResumeError, run_full
 from resume_tailor.render.latex import render_resume
 from resume_tailor.schemas import EvidenceGraph, Resume, ResumeHeader
 
@@ -43,13 +44,50 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 # Request models
 # --------------------------------------------------------------------------
 
-class RunRequest(BaseModel):
-    jd_text: str
-    name: str = "Candidate Name"
-    contact: dict[str, str] = Field(default_factory=dict)
-    github_username: str = Field(default="", description="optional: collect a live profile corpus")
-    evidence_based: bool = Field(default=True, description="verify claims against evidence and drop unverifiable bullets; False = quick draft")
+async def _parse_run_request(request: Request, upload_dir: Path) -> dict:
+    """Parse /api/run input from JSON or multipart/form-data.
 
+    Multipart is used by the SPA when the user attaches a previous resume
+    (``previous_resume`` file upload); the file is persisted under
+    corpus_dir/uploads so run_full can read it. JSON stays compatible and can
+    carry a server-side ``previous_resume_path`` for CLI/tests.
+    """
+    ct = request.headers.get("content-type", "")
+    if "multipart/form-data" in ct or "application/x-www-form-urlencoded" in ct:
+        form = await request.form()
+        contact_raw = form.get("contact") or "{}"
+        try:
+            contact = json.loads(contact_raw) if isinstance(contact_raw, str) and contact_raw.strip() else {}
+        except json.JSONDecodeError:
+            contact = {}
+        resume_path: Path | None = None
+        upload = form.get("previous_resume")
+        if upload is not None:
+            content = await upload.read()
+            if content:
+                suffix = Path(getattr(upload, "filename", "") or "prev_resume.pdf").suffix or ".pdf"
+                if suffix.lower() != ".pdf":
+                    raise HTTPException(400, "The previous resume must be a PDF file.")
+                upload_dir.mkdir(parents=True, exist_ok=True)
+                resume_path = upload_dir / f"prev_{uuid.uuid4().hex[:10]}.pdf"
+                resume_path.write_bytes(content)
+        return {
+            "jd_text": (form.get("jd_text") or "").strip(),
+            "name": (form.get("name") or "Candidate Name").strip() or "Candidate Name",
+            "contact": contact if isinstance(contact, dict) else {},
+            "github_username": (form.get("github_username") or "").strip(),
+            "evidence_based": str(form.get("evidence_based", "true")).lower() != "false",
+            "previous_resume": resume_path,
+        }
+    data = await request.json()
+    return {
+        "jd_text": (data.get("jd_text") or "").strip(),
+        "name": (data.get("name") or "Candidate Name").strip() or "Candidate Name",
+        "contact": data.get("contact") or {},
+        "github_username": (data.get("github_username") or "").strip(),
+        "evidence_based": bool(data.get("evidence_based", True)),
+        "previous_resume": data.get("previous_resume_path") or None,
+    }
 
 
 class ChatRequest(BaseModel):
@@ -186,36 +224,42 @@ def create_app(
     app = FastAPI(title="Resume Tailor", version="0.1.0")
 
     @app.post("/api/run")
-    def run(req: RunRequest) -> dict:
-        if not req.jd_text.strip():
+    async def run(request: Request) -> dict:
+        req = await _parse_run_request(request, corpus_dir / "uploads")
+        if not req["jd_text"]:
             raise HTTPException(400, "Job description text is required.")
         store = VectorStore(path=corpus_dir / "chroma")
-        if store.count() == 0 and not req.github_username.strip():
+        has_previous_resume = req["previous_resume"] is not None
+        if store.count() == 0 and not req["github_username"].strip() and not has_previous_resume:
             raise HTTPException(
                 400,
-                "No evidence corpus found. Pass a github_username to collect one live, or seed data/ first.",
+                "No evidence corpus found. Pass a github_username, upload a previous resume, or seed data/ first.",
             )
         collector = (
-            CollectorInput(jd_text=req.jd_text, github_username=req.github_username)
-            if req.github_username.strip()
+            CollectorInput(jd_text=req["jd_text"], github_username=req["github_username"])
+            if req["github_username"].strip()
             else None
         )
         client = client_factory()
         embedder = embedder_factory()
-        header = ResumeHeader(name=req.name, contact=req.contact)
+        header = ResumeHeader(name=req["name"], contact=req["contact"])
         session_id = uuid.uuid4().hex[:12]
         session_jobname = f"web_{session_id}"
-        result = run_full(
-            req.jd_text,
-            header,
-            client=client,
-            collector=collector,
-            corpus_dir=corpus_dir,
-            out_dir=out_dir,
-            jobname=session_jobname,  # per-session artifacts: no cross-session PDF bleed
-            embedder=embedder,
-            evidence_based=req.evidence_based,
-        )
+        try:
+            result = run_full(
+                req["jd_text"],
+                header,
+                client=client,
+                collector=collector,
+                corpus_dir=corpus_dir,
+                out_dir=out_dir,
+                jobname=session_jobname,  # per-session artifacts: no cross-session PDF bleed
+                embedder=embedder,
+                evidence_based=req["evidence_based"],
+                previous_resume=req["previous_resume"],
+            )
+        except PreviousResumeError as exc:
+            raise HTTPException(400, str(exc)) from exc
         graph_path = corpus_dir / "evidence_graph.json"
         graph = EvidenceGraph.model_validate_json(graph_path.read_text(encoding="utf-8")) if graph_path.exists() else EvidenceGraph()
         chat = ChatSession(
