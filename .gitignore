@@ -23,3 +23,6 @@ data/
 
 # Freebuff desktop app database (not project files)
 .freebuff/
+
+# Downloaded project archive
+*.zip

@@ -246,3 +246,114 @@ def _add_factory() -> MockLLMClient:
     client = _client_factory()
     client.register("chat_intent", [CHAT_INTENT_ADD])
     return client
+
+
+# --------------------------------------------------------------------------
+# Session records: list/search/filter, tracking fields, review packet
+# --------------------------------------------------------------------------
+
+
+def test_sessions_listed_after_run_with_filters(tmp_path):
+    client = _app(tmp_path)
+    client.post("/api/run", json={"jd_text": JD_TEXT, "name": "Jake Ryan"})
+
+    res = client.get("/api/sessions")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total"] == 1
+    rec = data["records"][0]
+    assert rec["jd_title"] == "Senior Backend Engineer"
+    assert rec["candidate_name"] == "Jake Ryan"
+    assert rec["evidence_based"] is True
+    assert rec["status"] == "verified"  # 1/1 bullets verified, evidence-based
+    assert rec["difficulty"] == "easy"  # 1/1 requirements matched
+    assert rec["progress"] == 90  # 20 + 40*1.0 + 30 + 0
+    assert rec["topic"] == "Senior Backend Engineer"
+
+    # keyword search (role, company, skills, bullets) — `total` stays the stored
+    # count; `records` is the filtered result set
+    assert len(client.get("/api/sessions", params={"q": "queue"}).json()["records"]) == 1
+    assert len(client.get("/api/sessions", params={"q": "Acme"}).json()["records"]) == 1
+    assert len(client.get("/api/sessions", params={"q": "zzz"}).json()["records"]) == 0
+    # facet filters
+    assert len(client.get("/api/sessions", params={"status": "verified"}).json()["records"]) == 1
+    assert len(client.get("/api/sessions", params={"status": "draft"}).json()["records"]) == 0
+    assert len(client.get("/api/sessions", params={"topic": "Senior Backend Engineer"}).json()["records"]) == 1
+    assert len(client.get("/api/sessions", params={"topic": "Data Scientist"}).json()["records"]) == 0
+    assert len(client.get("/api/sessions", params={"source": "evidence"}).json()["records"]) == 1
+    assert len(client.get("/api/sessions", params={"source": "draft"}).json()["records"]) == 0
+    assert len(client.get("/api/sessions", params={"difficulty": "easy"}).json()["records"]) == 1
+    assert len(client.get("/api/sessions", params={"difficulty": "hard"}).json()["records"]) == 0
+
+
+def test_sessions_empty_before_any_run(tmp_path):
+    res = _app(tmp_path).get("/api/sessions")
+    assert res.status_code == 200
+    assert res.json() == {"records": [], "topics": [], "total": 0}
+
+
+def test_session_status_saved_and_persisted(tmp_path):
+    from resume_tailor import sessions
+
+    corpus_dir = tmp_path / "corpus"
+    client = _app(tmp_path)
+    sid = client.post("/api/run", json={"jd_text": JD_TEXT}).json()["session_id"]
+
+    res = client.post(
+        f"/api/sessions/{sid}/status",
+        json={"status": "needs_work", "confidence": 65, "note": "needs distributed-systems evidence"},
+    )
+    assert res.status_code == 200
+    rec = res.json()
+    assert rec["status"] == "needs_work"
+    assert rec["confidence"] == 65
+    assert rec["note"] == "needs distributed-systems evidence"
+
+    # persisted to disk, reloadable (fresh record from the same corpus dir)
+    disk = sessions.load_record(sid, corpus_dir)
+    assert disk is not None and disk.confidence == 65 and disk.status == "needs_work"
+
+    # detail endpoint reflects the saved values
+    assert client.get(f"/api/sessions/{sid}").json()["confidence"] == 65
+    # validation
+    assert client.post(f"/api/sessions/{sid}/status", json={"status": "bogus"}).status_code == 400
+    assert client.post(f"/api/sessions/{sid}/status", json={"confidence": 101}).status_code == 400
+    assert client.get("/api/sessions/nope").status_code == 404
+
+
+def test_chat_edit_marks_record_refined(tmp_path):
+    client = _app(tmp_path)
+    sid = client.post("/api/run", json={"jd_text": JD_TEXT}).json()["session_id"]
+    assert client.get(f"/api/sessions/{sid}").json()["status"] == "verified"
+
+    client.post("/api/chat", json={"session_id": sid, "message": "rewrite it"})
+    rec = client.get(f"/api/sessions/{sid}").json()
+    assert rec["status"] == "refined"
+    assert rec["has_chat_edits"] is True
+    # the user's confidence survives a chat update (merge, not rebuild)
+    client.post(f"/api/sessions/{sid}/status", json={"confidence": 80})
+    client.post("/api/chat", json={"session_id": sid, "message": "rewrite it again"})
+    assert client.get(f"/api/sessions/{sid}").json()["confidence"] == 80
+
+
+def test_review_packet_download(tmp_path):
+    client = _app(tmp_path)
+    sid = client.post("/api/run", json={"jd_text": JD_TEXT, "name": "Jake Ryan"}).json()["session_id"]
+    res = client.get(f"/api/sessions/{sid}/packet")
+    assert res.status_code == 200
+    assert "text/markdown" in res.headers["content-type"]
+    assert "attachment" in res.headers["content-disposition"]
+    md = res.text
+    assert md.startswith("# Resume Review Packet")
+    assert "Jake Ryan" in md
+    assert "Senior Backend Engineer" in md
+    assert "Redis and message queues" in md
+    assert "## 2. Tailored resume changes" in md
+    assert "## 3. Supporting evidence" in md
+    assert SNIPPET in md  # evidence snippet from the corpus graph
+    assert "## 4. Weak areas" in md
+    assert "## 6. Recommended next actions" in md
+
+
+def test_packet_404_for_unknown_session(tmp_path):
+    assert _app(tmp_path).get("/api/sessions/nope/packet").status_code == 404

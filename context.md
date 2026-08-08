@@ -4,6 +4,26 @@
 
 ## Session Log
 
+### Session 13 — 2026-08-08: Hackathon deliverables — session records, review packets, progress/confidence ✅
+
+- **Session records layer** (`resume_tailor/sessions.py` + web): every completed run is snapshotted to `data/sessions/<session_id>.json` (JD, requirements + match status, gaps, dropped bullets, verification verdicts, final resume sections incl. education/career, chat transcript, derived status/progress/difficulty). Records are self-contained and survive server restarts.
+- **Search + filters** (spec: search input, filter control, filtered results, empty state, reset): `GET /api/sessions?q=&status=&topic=&source=&difficulty=`; SPA panel below the hero with keyword search (role/company/skills/bullets), status/topic/mode/difficulty selects, Reset filters, empty states for both no-sessions and no-matches. `total` = stored count, `records` = filtered.
+- **Review packet** (spec: export button, structured packet, education/career fields, sample output): `GET /api/sessions/{id}/packet` → structured Markdown (overview + requirements w/ match status, tailored resume changes, supporting evidence w/ graph snippets + URLs, weak areas = gaps + dropped, key questions from verification, recommended next actions, chat log incl. refused requests); Packet button in topbar + per-row + Session tab. Sample: `scripts/demo_packet.py` → `out/review_packet_sample.md`.
+- **Progress & confidence tracking** (spec: progress selector, confidence/note field, saved values, visible status): derived `status` (draft/verified/refined — refined after chat edits), `progress` 0-100 (20 + 40×matched% + 30 verified + 10 chat), `difficulty` (easy/medium/hard from match ratio); user-set status (override flag), confidence 0-100 slider + note via `POST /api/sessions/{id}/status`; shown as badges + progress bars + confidence in both the list and the new Session tab. Saved values persist across chat updates (merge, not rebuild).
+- **Read-only open**: sessions created outside the live server (CLI/demo) open via a record-only fallback view when `/api/state` 404s (resume + trace from record, chat/PDF disabled, Packet enabled).
+- **Fixes from review**: removed dead `json` import; `bullets_verified` now counted from the current resume (not the stale run-time stat); `has_chat_edits` passed from the real patch log so undo-all downgrades status; no spurious bare headings for entry-based sections in the packet; packet surfaces flagged/refused chat requests; PDF/TEX topbar buttons disabled for imported sessions.
+- **167/167 tests pass** (+15: sessions derivation/persistence/filtering/packet, web list/filters/status-save/packet). Live UI verified in preview: search → empty state → reset, Open (read-only) → Session tab save → status REFINED + confidence 70/100 + note visible in list, packet download via curl.
+
+### Session 12 — 2026-08-08: Fresh checkout brought to a running state ✅ (launch + 3 fixes)
+
+- **Deps**: `[web]` extra was missing chromadb + sentence-transformers — the app imported them at boot/run but `run.sh`/README only installed `.[web]`. Added them to the `web` extra (chromadb pinned `>=1.0`); venv installed with `.[web,phase1,dev]`; torch CPU-only (pytorch index). `import resume_tailor.web` boots.
+- **Corpus seeded fresh** (this checkout had no `data/`): sindresorhus live fetch → **760 sources / 5,614 chunks**, embedded + persisted to `data/chroma` + `data/evidence_graph.json`, 0 warnings.
+- **Bug 1 (chromadb 1.5.x batch cap)**: `VectorStore.add` upserted everything in one call → `InternalError: Batch size 5614 > 5461`. Fixed: batched upserts (1000/batch) + regression test (`test_add_batches_large_corpus_past_chromadb_batch_cap`) → **152 tests pass**.
+- **Bug 2 (ephemeral store)**: `collect()` defaulted to an in-memory Chroma store even when `cache_dir` was given, so the README's seeding snippet never persisted vectors for the web app. Fixed: `cache_dir` now implies `VectorStore(path=cache_dir/chroma)`.
+- **System deps**: installed texlive (latex-base/recommended/fonts-recommended + latex-extra) so pdflatex renders the Jake's Resume template.
+- **Verified end-to-end offline** (no API key, mock mode): `demo_build.py` → parse→match→build→verify→render, 3 matched (2 lexical direct, 1 reformulated), 1 honest gap, 1 unverifiable bullet dropped, **PDF rendered** (76 KB). `demo_chat.py` → rewrite applied, add_claim flagged (moment #2), reorder + undo applied, PDFs re-rendered.
+- **Web app live on http://127.0.0.1:8177/** (uvicorn, pid tracked in /tmp/resume_tailor_web.log); landing page + run modal verified in preview. Browser runs still need a `GROQ_API_KEY` (mock mode in the web app has only the jd_parser default — matcher/builder/verifier/chat tasks fail loudly, by design).
+
 ### Session 2 — 2026-08-08: Phase 1 Collector Agent complete ✅ (see changelog)
 
 ### Session 3 — 2026-08-08: Demo corpus seeded + expanded (see changelog)
@@ -120,6 +140,8 @@
 
 ## Changelog
 
+- 2026-08-08: Session 13 — **Hackathon deliverables**: session records (`data/sessions/`), search/filter UI (q/status/topic/mode/difficulty + empty state + reset), downloadable review packets (structured markdown + sample output), progress/confidence tracking (derived status/progress/difficulty + user-set confidence/note, saved & visible). **167 tests.**
+- 2026-08-08: Session 12 — **Fresh-checkout launch**: `[web]` extra fixed (chromadb+sentence-transformers), chromadb batch-cap + ephemeral-store fixes in the collector, sindresorhus corpus re-seeded (760 sources / 5,614 chunks), texlive installed, server live on 8177, full pipeline + chat verified offline. **152 tests.**
 - 2026-08-08: Session 1 — brainstorm, context/project docs, Phase 0 (schemas + render + dummy compile), 13 tests.
 - 2026-08-08: Session 2 — **Phase 1 Collector complete** (parallel readers, pre-filtering, chunking, embedding, Chroma store, EvidenceGraph); **43 tests.**
 - 2026-08-08: Session 3 — **Demo corpus seeded**: sindresorhus cached offline; fetcher rewritten (search API + raw + atom feeds — rate-limit-safe, fixes ignored `sort=stars`); readme dedupe; 201 sources / 1,785 chunks; **44 tests.**

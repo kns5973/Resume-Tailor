@@ -30,6 +30,13 @@ web = [
     "fastapi>=0.110",  # Phase 6 frontend API (resume_tailor/web.py)
     "uvicorn>=0.29",   # ASGI server: python -m resume_tailor.web
     "httpx>=0.27",     # FastAPI TestClient
+    # Runtime requirements of the web app itself: chromadb is imported at app
+    # boot (collector.vector_store) and sentence-transformers when a job runs
+    # (collector.embed). Without these, `python -m resume_tailor.web` fails.
+    # chromadb pinned to 1.x (the version the client code + batch caps are
+    # validated against).
+    "chromadb>=1.0",
+    "sentence-transformers>=3.0",  # pulls torch
 ]
 
 [tool.setuptools.package-data]

@@ -144,8 +144,10 @@ async def collect(
         for chunk in artifact.chunks:
             graph.add_chunk(chunk)
 
-    # Embed once + store (efficiency rule #2).
-    store = store or VectorStore()
+    # Embed once + store (efficiency rule #2). A cache_dir implies a persistent
+    # local store (the web app reads corpus_dir/chroma); without one we fall
+    # back to an ephemeral in-memory store.
+    store = store or (VectorStore(path=Path(cache_dir) / "chroma") if cache_dir else VectorStore())
     texts = [c.text for a in artifacts for c in a.chunks]
     ids = [c.chunk_id for a in artifacts for c in a.chunks]
     metadatas: list[dict] = []

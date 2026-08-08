@@ -62,6 +62,30 @@ def test_query_clamps_n_results_to_count():
     assert len(hits[0]) == 1
 
 
+def test_add_batches_large_corpus_past_chromadb_batch_cap():
+    # Regression: chromadb 1.5.x raises InternalError when a single upsert
+    # exceeds its batch cap (5,461). add() must chunk the write so a corpus
+    # larger than the cap can be seeded (the sindresorhus demo corpus is 5,614).
+    store = _store()
+    emb = FakeEmbedder()
+    n = 6000
+    store.add(
+        ids=[f"c{i}" for i in range(n)],
+        embeddings=emb.embed([f"chunk {i}" for i in range(n)]),
+        documents=[f"chunk {i}" for i in range(n)],
+        metadatas=[{"source_id": "s"} for _ in range(n)],
+    )
+    assert store.count() == n
+    # re-seeding stays idempotent across batches (upsert semantics)
+    store.add(
+        ids=[f"c{i}" for i in range(n)],
+        embeddings=emb.embed([f"chunk {i}" for i in range(n)]),
+        documents=[f"chunk {i}" for i in range(n)],
+        metadatas=[{"source_id": "s"} for _ in range(n)],
+    )
+    assert store.count() == n
+
+
 def test_add_same_id_twice_is_idempotent():
     # upsert semantics: re-collecting against the same store must not crash or dup
     store = _store()

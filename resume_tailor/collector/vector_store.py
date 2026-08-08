@@ -34,11 +34,19 @@ class VectorStore:
         """Insert or replace chunks (upsert) — repeated collects are idempotent.
 
         chroma's add() raises on duplicate ids; upsert() makes re-collecting
-        against the same persistent store safe.
+        against the same persistent store safe. Batched in case the corpus
+        exceeds chromadb's per-call batch cap (5,461 in chromadb 1.5.x).
         """
         if not ids:
             return
-        self._collection.upsert(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+        batch = 1000
+        for i in range(0, len(ids), batch):
+            self._collection.upsert(
+                ids=ids[i : i + batch],
+                embeddings=embeddings[i : i + batch],
+                documents=documents[i : i + batch],
+                metadatas=metadatas[i : i + batch],
+            )
 
     def get_all(self) -> list[dict]:
         """All stored chunks as [{chunk_id, text, metadata}] — for lexical scanning.

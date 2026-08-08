@@ -17,6 +17,8 @@
       <button id="btn-undo" class="btn btn-ghost" disabled title="Revert the last applied edit">↩ Undo</button>
       <button id="btn-export-pdf" class="btn btn-ghost" disabled title="Download the rendered PDF">PDF</button>
       <button id="btn-export-tex" class="btn btn-ghost" disabled title="Download the LaTeX source">TEX</button>
+      <button id="btn-packet" class="btn btn-ghost" disabled title="Download the review packet for this session">Packet</button>
+      <button id="btn-sessions" class="btn btn-ghost" title="Browse and filter past sessions">Sessions</button>
       <button id="btn-run" class="btn btn-primary">New Run</button>
     </div>
   </header>
@@ -103,6 +105,7 @@
         <button class="tab active" data-tab="chat" role="tab">Chat</button>
         <button class="tab" data-tab="trace" role="tab">Trace</button>
         <button class="tab" data-tab="resume" role="tab">Resume</button>
+        <button class="tab" data-tab="session" role="tab">Session</button>
       </nav>
 
       <div id="tab-chat" class="tabpanel active">
@@ -117,6 +120,7 @@
 
       <div id="tab-trace" class="tabpanel"></div>
       <div id="tab-resume" class="tabpanel"></div>
+      <div id="tab-session" class="tabpanel"></div>
     </section>
   </main>
 
@@ -132,6 +136,41 @@
       </ul>
     </div>
   </div>
+
+  <section id="sessions-panel" class="sessions-panel">
+    <div class="sessions-inner">
+      <div class="sessions-head">
+        <h2 class="sessions-title">Your sessions</h2>
+        <span id="sessions-count" class="sessions-count"></span>
+        <button id="sessions-reset" class="btn">Reset filters</button>
+      </div>
+      <div class="sessions-controls">
+        <input id="sessions-q" class="sessions-search" type="search" placeholder="Search sessions — role, company, skills, bullets…" autocomplete="off">
+        <select id="sessions-status" class="sessions-filter" title="Filter by progress status">
+          <option value="">All statuses</option>
+          <option value="draft">Draft</option>
+          <option value="verified">Verified</option>
+          <option value="refined">Refined</option>
+          <option value="needs_work">Needs work</option>
+        </select>
+        <select id="sessions-topic" class="sessions-filter" title="Filter by topic (role)">
+          <option value="">All topics</option>
+        </select>
+        <select id="sessions-source" class="sessions-filter" title="Filter by drafting mode">
+          <option value="">Any mode</option>
+          <option value="evidence">Evidence-based</option>
+          <option value="draft">Draft</option>
+        </select>
+        <select id="sessions-difficulty" class="sessions-filter" title="Filter by JD difficulty">
+          <option value="">Any difficulty</option>
+          <option value="easy">Easy</option>
+          <option value="medium">Medium</option>
+          <option value="hard">Hard</option>
+        </select>
+      </div>
+      <div id="sessions-list" class="sessions-list"></div>
+    </div>
+  </section>
 
   <!-- pdf.js is loaded async: a slow/blocked CDN must never block app.js from
        running (dead buttons). refreshPdf() guards window.pdfjsLib at call time

@@ -21,10 +21,11 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from resume_tailor import sessions
 from resume_tailor.chat import ChatSession
 from resume_tailor.collector import CollectorInput, SentenceTransformerEmbedder, VectorStore
 from resume_tailor.collector.embed import Embedder
@@ -58,6 +59,12 @@ class ChatRequest(BaseModel):
 
 class UndoRequest(BaseModel):
     session_id: str
+
+
+class StatusUpdate(BaseModel):
+    status: str | None = None
+    confidence: int | None = None
+    note: str | None = None
 
 
 # --------------------------------------------------------------------------
@@ -150,16 +157,31 @@ def create_app(
     """Build the FastAPI app. Tests inject mock factories + tmp dirs."""
     corpus_dir = Path(corpus_dir) if corpus_dir else PROJECT_ROOT / "data"
     out_dir = Path(out_dir) if out_dir else PROJECT_ROOT / "out"
-    sessions: dict[str, _WebSession] = {}
+    web_sessions: dict[str, _WebSession] = {}
 
     def _get(session_id: str) -> _WebSession:
-        ws = sessions.get(session_id)
+        ws = web_sessions.get(session_id)
         if ws is None:
             raise HTTPException(404, f"Unknown session {session_id!r} — run a new job first.")
         return ws
 
     def _rerender(ws: _WebSession) -> None:
         render_resume(ws.chat.resume, out_dir, jobname=ws.jobname)
+
+    def _persist_session(ws: _WebSession) -> None:
+        """Snapshot the current session to disk, preserving user-set tracking
+        fields (confidence/note/status override) across updates."""
+        fresh = sessions.record_from_result(
+            ws.session_id, ws.result, ws.chat.resume, _transcript(ws.chat), has_chat_edits=bool(ws.chat.log)
+        )
+        existing = sessions.load_record(ws.session_id, corpus_dir)
+        if existing is not None:
+            fresh.confidence = existing.confidence
+            fresh.note = existing.note
+            fresh.status_override = existing.status_override
+            if existing.status_override:
+                fresh.status = existing.status
+        sessions.save_record(fresh, corpus_dir)
 
     app = FastAPI(title="Resume Tailor", version="0.1.0")
 
@@ -204,7 +226,8 @@ def create_app(
             embedder=embedder,
             match_config=MatchConfig(use_keywords=True),
         )
-        sessions[session_id] = _WebSession(session_id, chat, result, jobname=session_jobname)
+        web_sessions[session_id] = _WebSession(session_id, chat, result, jobname=session_jobname)
+        _persist_session(web_sessions[session_id])
         return _session_payload(session_id, chat, result)
 
     @app.post("/api/chat")
@@ -213,6 +236,7 @@ def create_app(
         result = ws.chat.send(req.message)
         if result.applied:
             _rerender(ws)  # efficiency rule #5: recompile only on applied sends
+        _persist_session(ws)
         return {
             "result": {"message": result.message, "applied": result.applied, "flagged": result.flagged},
             "resume": ws.chat.resume.model_dump(),
@@ -226,6 +250,7 @@ def create_app(
         result = ws.chat.undo()
         if result is not None:
             _rerender(ws)
+        _persist_session(ws)
         return {
             "result": {"message": result.message if result else "Nothing to undo.", "applied": result is not None},
             "resume": ws.chat.resume.model_dump(),
@@ -258,6 +283,56 @@ def create_app(
         if not path.exists():
             raise HTTPException(404, "No .tex yet — run a job first.")
         return FileResponse(path, media_type="application/x-tex", filename="resume.tex")
+
+    # ------------------------------------------------------------------
+    # Session records: list/search/filter, tracking fields, review packet
+    # ------------------------------------------------------------------
+
+    @app.get("/api/sessions")
+    def sessions_list(q: str = "", status: str = "", topic: str = "", source: str = "", difficulty: str = "") -> dict:
+        records = sessions.load_records(corpus_dir)
+        filtered = sessions.filter_records(
+            records, q=q, status=status, topic=topic, source=source, difficulty=difficulty
+        )
+        topics = sorted({r.topic for r in records if r.topic})
+        return {"records": [r.model_dump() for r in filtered], "topics": topics, "total": len(records)}
+
+    def _get_record(session_id: str) -> sessions.SessionRecord:
+        record = sessions.load_record(session_id, corpus_dir)
+        if record is None:
+            raise HTTPException(404, f"No saved session record for {session_id!r}")
+        return record
+
+    @app.get("/api/sessions/{session_id}")
+    def session_detail(session_id: str) -> dict:
+        return _get_record(session_id).model_dump()
+
+    @app.post("/api/sessions/{session_id}/status")
+    def session_status(session_id: str, req: StatusUpdate) -> dict:
+        record = _get_record(session_id)
+        if req.status is not None:
+            if req.status not in sessions.STATUSES:
+                raise HTTPException(400, f"status must be one of {', '.join(sessions.STATUSES)}")
+            record.status = req.status
+            record.status_override = True
+        if req.confidence is not None:
+            if not 0 <= req.confidence <= 100:
+                raise HTTPException(400, "confidence must be 0-100")
+            record.confidence = req.confidence
+        if req.note is not None:
+            record.note = req.note.strip()
+        sessions.save_record(record, corpus_dir)
+        return record.model_dump()
+
+    @app.get("/api/sessions/{session_id}/packet")
+    def session_packet(session_id: str) -> Response:
+        record = _get_record(session_id)
+        md = sessions.build_packet(record, sessions.load_evidence_index(corpus_dir))
+        return Response(
+            content=md,
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="review_packet_{session_id}.md"'},
+        )
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
